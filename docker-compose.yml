@@ -1,0 +1,14 @@
+version: '3.8'
+
+services:
+  xss-demo:
+    build: .
+    ports:
+      - "8087:8087"
+    container_name: xss-vulnerability-demo
+    environment:
+      - NODE_ENV=production
+      - PORT=8087
+    volumes:
+      - ./state.json:/app/state.json
+    restart: unless-stopped
