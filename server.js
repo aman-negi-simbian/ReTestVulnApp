@@ -27,30 +27,114 @@ function setState(newState) {
   fs.writeFileSync(STATE_FILE, JSON.stringify({ state: newState }, null, 2));
 }
 
+const BLOCKED_HANDLERS = ['onclick', 'onerror', 'onload', 'onfocus', 'onmouseover'];
+
+function removeScriptBlocks(str) {
+  let s = str;
+  while (true) {
+    const i = s.toLowerCase().indexOf('<script');
+    if (i === -1) break;
+    const j = s.toLowerCase().indexOf('</script>', i);
+    if (j === -1) {
+      const nextClose = s.indexOf('>', i);
+      s = nextClose === -1 ? s.slice(0, i) : s.slice(0, i) + s.slice(nextClose + 1);
+      break;
+    }
+    s = s.slice(0, i) + s.slice(j + '</script>'.length);
+  }
+  return s;
+}
+
+function stripBlockedHandlersFromTag(tagInner) {
+  const attrs = parseTagAttributes(tagInner);
+  const kept = attrs.filter((a) => !BLOCKED_HANDLERS.includes(a.name.toLowerCase()));
+  return kept.map((a) => (a.value === null ? a.name : a.name + '=' + a.value)).join(' ');
+}
+
+function parseTagAttributes(inner) {
+  const result = [];
+  let i = 0;
+  while (i < inner.length) {
+    while (i < inner.length && (inner[i] === ' ' || inner[i] === '\t')) i++;
+    if (i >= inner.length) break;
+    let nameEnd = i;
+    while (nameEnd < inner.length && inner[nameEnd] !== '=' && inner[nameEnd] !== ' ' && inner[nameEnd] !== '\t') nameEnd++;
+    const name = inner.slice(i, nameEnd);
+    if (!name) break;
+    i = nameEnd;
+    if (i < inner.length && inner[i] === '=') {
+      i++;
+      if (i >= inner.length) {
+        result.push({ name, value: null });
+        break;
+      }
+      const q = inner[i];
+      let value;
+      if (q === '"' || q === "'") {
+        const end = inner.indexOf(q, i + 1);
+        value = end === -1 ? inner.slice(i) : inner.slice(i, end + 1);
+        i = end === -1 ? inner.length : end + 1;
+      } else {
+        let end = i;
+        while (end < inner.length && inner[end] !== ' ' && inner[end] !== '\t') end++;
+        value = inner.slice(i, end);
+        i = end;
+      }
+      result.push({ name, value });
+    } else {
+      result.push({ name, value: null });
+    }
+  }
+  return result;
+}
+
+function stripHandlersInHtml(html) {
+  let out = '';
+  let pos = 0;
+  while (pos < html.length) {
+    const open = html.indexOf('<', pos);
+    if (open === -1) {
+      out += html.slice(pos);
+      break;
+    }
+    const close = html.indexOf('>', open);
+    if (close === -1) {
+      out += html.slice(pos);
+      break;
+    }
+    out += html.slice(pos, open + 1);
+    const inner = html.slice(open + 1, close);
+    let tagNameEnd = 0;
+    while (tagNameEnd < inner.length && inner[tagNameEnd] !== ' ' && inner[tagNameEnd] !== '\t') tagNameEnd++;
+    const tagName = inner.slice(0, tagNameEnd);
+    const rest = tagNameEnd < inner.length ? inner.slice(tagNameEnd).trim() : '';
+    if (tagName.toLowerCase() === 'script') {
+      out += '';
+      pos = close + 1;
+      continue;
+    }
+    out += tagName + (rest ? ' ' + stripBlockedHandlersFromTag(rest) : '') + '>';
+    pos = close + 1;
+  }
+  return out;
+}
+
+function applyPartialFix(query) {
+  const noScript = removeScriptBlocks(query);
+  return stripHandlersInHtml(noScript);
+}
+
 // Process query based on vulnerability state
 function processQuery(query, state) {
   switch (state) {
     case 'MAKE_VULNERABLE':
-      // Return unsanitized - XSS vulnerable
       return query;
 
     case 'FIX_COMPLETELY':
-      // Use DOMPurify to completely sanitize
       return DOMPurify.sanitize(query, { ALLOWED_TAGS: [] });
 
     case 'FIX_PARTIALLY':
-      // Sanitize but allow <script> tags (incomplete fix)
-      // Remove all HTML tags except <script>
-      let partial = query;
-      // Remove all tags except script tags
-      partial = partial.replace(/<(?!script\b)[^>]*>/gi, (match) => {
-        // Keep script-related tags
-        if (match.toLowerCase().includes('script')) {
-          return match;
-        }
-        return ''; // Remove other tags
-      });
-      return partial;
+      return applyPartialFix(query);
 
     default:
       return query;
