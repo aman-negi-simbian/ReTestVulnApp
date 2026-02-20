@@ -15,7 +15,6 @@ if (!fs.existsSync(STATE_FILE)) {
 
 // Middleware
 app.use(express.static('public'));
-app.use(express.json());
 
 // Get current state
 function getState() {
@@ -58,21 +57,26 @@ function processQuery(query, state) {
   }
 }
 
-// Helper to encode state to number
+// Helper to encode state to number (0, 1, 2)
 function encodeState(state) {
   const stateMap = {
     'MAKE_VULNERABLE': '2',
     'FIX_PARTIALLY': '1',
     'FIX_COMPLETELY': '0'
   };
-  return stateMap[state] || state;
+  return stateMap[state] || '2';
+}
+
+// Helper to decode number to state
+function decodeState(num) {
+  const stateMap = { '0': 'FIX_COMPLETELY', '1': 'FIX_PARTIALLY', '2': 'MAKE_VULNERABLE' };
+  return stateMap[String(num)];
 }
 
 // GET /search - Main search endpoint
 app.get('/search', (req, res) => {
   const query = req.query.q || '';
   const currentState = getState();
-  const encodedState = encodeState(currentState);
   const processed = processQuery(query, currentState);
 
   res.send(`
@@ -84,7 +88,6 @@ app.get('/search', (req, res) => {
     </head>
     <body>
       <h1>Search Results</h1>
-      <p>State: ${encodedState}</p>
       <p><strong>Query:</strong> ${escapeHtml(query)}</p>
       <p><strong>Result:</strong><br>${processed}</p>
       <p><a href="/">← Back to Home</a></p>
@@ -103,22 +106,19 @@ function escapeHtml(unsafe) {
     .replace(/'/g, "&#039;");
 }
 
-// API endpoint to get current state
-app.get('/api/state', (req, res) => {
-  res.json({ state: getState() });
+// GET /get-abc — returns current state as a number (0, 1, or 2)
+app.get('/get-abc', (req, res) => {
+  res.send(encodeState(getState()));
 });
 
-// API endpoint to update state
-app.post('/api/state', (req, res) => {
-  const { state } = req.body;
-  const validStates = ['MAKE_VULNERABLE', 'FIX_COMPLETELY', 'FIX_PARTIALLY'];
-
-  if (validStates.includes(state)) {
-    setState(state);
-    res.json({ success: true, state });
-  } else {
-    res.status(400).json({ success: false, error: 'Invalid state' });
+// GET /set-abc/0 or /set-abc/1 or /set-abc/2 — sets state and returns the number
+app.get('/set-abc/:num', (req, res) => {
+  const state = decodeState(req.params.num);
+  if (!state) {
+    return res.status(400).send('Invalid state; use 0, 1, or 2');
   }
+  setState(state);
+  res.send(req.params.num);
 });
 
 app.listen(PORT, () => {
